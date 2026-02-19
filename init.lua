@@ -353,7 +353,31 @@ require('lazy').setup({
         sources = { { name = 'crates' } },
       }
     end,
-  }, -- NOTE: Plugins can also be configured to run Lua code when they are loaded.
+  },
+
+  {
+    'nvim-tree/nvim-tree.lua',
+    version = '*',
+    lazy = false,
+    dependencies = {
+      'nvim-tree/nvim-web-devicons',
+    },
+    config = function()
+      require('nvim-tree').setup {
+        view = {
+          width = 30,
+          side = 'left',
+        },
+        renderer = {
+          group_empty = true,
+        },
+        filters = {
+          dotfiles = false,
+        },
+      }
+    end,
+  },
+  -- NOTE: Plugins can also be configured to run Lua code when they are loaded.
   --
   -- This is often very useful to both group configuration, as well as handle
   -- lazy loading plugins that don't need to be loaded immediately at startup.
@@ -476,6 +500,8 @@ require('lazy').setup({
       vim.keymap.set('n', '<leader>s.', builtin.oldfiles, { desc = '[S]earch Recent Files ("." for repeat)' })
       vim.keymap.set('n', '<leader>sc', builtin.commands, { desc = '[S]earch [C]ommands' })
       vim.keymap.set('n', '<leader><leader>', builtin.buffers, { desc = '[ ] Find existing buffers' })
+
+      -- RUST https://github.com/letsgetrusty/neovim-rust/
       local map = vim.keymap.set
 
       map('n', ';', ':', { desc = 'CMD enter command mode' })
