@@ -758,7 +758,8 @@ require("lazy").setup({
 			local servers = {
 				clangd = {},
 				-- gopls = {},
-				-- pyright = {},
+				pyright = {},
+				ruff = {},
 				["rust-analyzer"] = {
 					checkOnSave = {
 						command = "clippy",
