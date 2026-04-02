@@ -151,6 +151,8 @@ vim.o.splitbelow = true
 --   and `:help lua-guide-options`
 vim.o.list = false
 vim.opt.listchars = { tab = "» ", trail = "·", nbsp = "␣" }
+vim.opt["tabstop"] = 4
+vim.opt["shiftwidth"] = 4
 
 -- Preview substitutions live, as you type!
 vim.o.inccommand = "split"
@@ -303,10 +305,6 @@ require("lazy").setup({
 		},
 	},
 	{
-		"stevearc/conform.nvim",
-		event = "BufWritePre", -- uncomment for format on save
-	},
-	{
 		"mrcjkb/rustaceanvim",
 		version = "^5",
 		ft = "rust",
@@ -357,24 +355,20 @@ require("lazy").setup({
 			require("dapui").setup()
 		end,
 	},
-
 	{
 		"saecki/crates.nvim",
 		ft = { "toml" },
 		config = function()
 			require("crates").setup({
-				completion = {
-					cmp = {
-						enabled = true,
-					},
+				lsp = {
+					enabled = true,
+					actions = true,
+					completion = true,
+					hover = true,
 				},
-			})
-			require("cmp").setup.buffer({
-				sources = { { name = "crates" } },
 			})
 		end,
 	},
-
 	{
 		"nvim-tree/nvim-tree.lua",
 		version = "*",
@@ -396,6 +390,14 @@ require("lazy").setup({
 				},
 			})
 		end,
+	},
+
+	{
+		"windwp/nvim-autopairs",
+		event = "InsertEnter",
+		config = true,
+		-- use opts = {} for passing setup options
+		-- this is equivalent to setup({}) function
 	},
 	-- NOTE: Plugins can also be configured to run Lua code when they are loaded.
 	--
@@ -527,7 +529,6 @@ require("lazy").setup({
 			local map = vim.keymap.set
 
 			map("n", ";", ":", { desc = "CMD enter command mode" })
-			map("i", "jk", "<ESC>")
 
 			-- map({ "n", "i", "v" }, "<C-s>", "<cmd> w <cr>")
 
@@ -845,20 +846,7 @@ require("lazy").setup({
 		},
 		opts = {
 			notify_on_error = false,
-			format_on_save = function(bufnr)
-				-- Disable "format_on_save lsp_fallback" for languages that don't
-				-- have a well standardized coding style. You can add additional
-				-- languages here or re-enable it for the disabled ones.
-				local disable_filetypes = { c = true, cpp = true }
-				if disable_filetypes[vim.bo[bufnr].filetype] then
-					return nil
-				else
-					return {
-						timeout_ms = 500,
-						lsp_format = "fallback",
-					}
-				end
-			end,
+			format_on_save = false,
 			formatters_by_ft = {
 				lua = { "stylua" },
 				-- Conform can also run multiple formatters sequentially
@@ -1054,6 +1042,7 @@ require("lazy").setup({
 				"query",
 				"vim",
 				"vimdoc",
+				"asm",
 			},
 			auto_install = true,
 			highlight = { enable = true },
