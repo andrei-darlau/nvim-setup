@@ -98,7 +98,11 @@ vim.g.have_nerd_font = true
 -- NOTE: You can change these options as you wish!
 --  For more options, you can see `:help option-list`
 
--- Make line numbers default
+-- Make line numbers default-- Allow arrow keys to wrap across lines
+vim.opt.whichwrap:append("<,>,[,]")
+vim.opt.foldmethod = "expr"
+vim.opt.foldexpr = "v:lua.vim.treesitter.foldexpr()"
+vim.opt.foldlevel = 99
 vim.o.number = true
 -- You can also add relative line numbers, to help with jumping.
 --  Experiment for yourself to see if you like it!
@@ -168,13 +172,22 @@ vim.o.scrolloff = 10
 -- See `:help 'confirm'`
 vim.o.confirm = true
 
+-- treat .asm as .nasm
+vim.filetype.add({
+	extension = {
+		asm = "nasm",
+	},
+})
+
 -- [[ Basic Keymaps ]]
 --  See `:help vim.keymap.set()`
 
 -- Clear highlights on search when pressing <Esc> in normal mode
 --  See `:help hlsearch`
 vim.keymap.set("n", "<Esc>", "<cmd>nohlsearch<CR>")
-
+-- Keep visual mode active after indenting
+vim.keymap.set("v", "<", "<gv", { desc = "Indent left and keep selection" })
+vim.keymap.set("v", ">", ">gv", { desc = "Indent right and keep selection" })
 -- Diagnostic Config & Keymaps
 -- See :help vim.diagnostic.Opts
 vim.diagnostic.config({
@@ -215,6 +228,19 @@ vim.keymap.set("n", "<C-h>", "<C-w><C-h>", { desc = "Move focus to the left wind
 vim.keymap.set("n", "<C-l>", "<C-w><C-l>", { desc = "Move focus to the right window" })
 vim.keymap.set("n", "<C-j>", "<C-w><C-j>", { desc = "Move focus to the lower window" })
 vim.keymap.set("n", "<C-k>", "<C-w><C-k>", { desc = "Move focus to the upper window" })
+
+-- Move lines up and down
+-- Normal-mode commands
+vim.keymap.set("n", "<A-Up>", "<cmd>m .-2<cr>==", { desc = "Move line up" })
+vim.keymap.set("n", "<A-Down>", "<cmd>m .+1<cr>==", { desc = "Move line down" })
+vim.keymap.set("n", "<A-k>", "<cmd>m .-2<cr>==", { desc = "Move line up (hjkl)" })
+vim.keymap.set("n", "<A-j>", "<cmd>m .+1<cr>==", { desc = "Move line down (hjkl)" })
+
+-- Visual-mode commands (moves highlighted blocks)
+vim.keymap.set("v", "<A-Up>", ":m '<-2<cr>gv=gv", { desc = "Move block up" })
+vim.keymap.set("v", "<A-Down>", ":m '>+1<cr>gv=gv", { desc = "Move block down" })
+vim.keymap.set("v", "<A-k>", ":m '<-2<cr>gv=gv", { desc = "Move block up (hjkl)" })
+vim.keymap.set("v", "<A-j>", ":m '>+1<cr>gv=gv", { desc = "Move block down (hjkl)" })
 
 -- NOTE: Some terminals have colliding keymaps or are not able to send distinct keycodes
 -- vim.keymap.set("n", "<C-S-h>", "<C-w>H", { desc = "Move window to the left" })
@@ -328,11 +354,12 @@ require("lazy").setup({
 			vim.g.rustfmt_autosave = 1
 		end,
 	},
-
 	{
 		"mfussenegger/nvim-dap",
 		config = function()
 			local dap, dapui = require("dap"), require("dapui")
+
+			-- DAP UI listeners to automatically open/close the debugger panels
 			dap.listeners.before.attach.dapui_config = function()
 				dapui.open()
 			end
@@ -345,9 +372,43 @@ require("lazy").setup({
 			dap.listeners.before.event_exited.dapui_config = function()
 				dapui.close()
 			end
+
+			-- 1. Setup the codelldb adapter
+			local extension_path = vim.fn.stdpath("data") .. "/mason/packages/codelldb/extension/"
+			local codelldb_path = extension_path .. "adapter/codelldb"
+
+			dap.adapters.codelldb = {
+				type = "server",
+				port = "${port}",
+				executable = {
+					command = codelldb_path,
+					args = { "--port", "${port}" },
+				},
+			}
+
+			-- 2. Configure it for C and C++ (with arguments prompt)
+			dap.configurations.cpp = {
+				{
+					name = "Launch file",
+					type = "codelldb",
+					request = "launch",
+					program = function()
+						return vim.fn.input("Path to executable: ", vim.fn.getcwd() .. "/", "file")
+					end,
+					args = function()
+						local args_string = vim.fn.input("Arguments: ")
+						-- Split the string by spaces so the debugger gets a proper list
+						return vim.split(args_string, " +")
+					end,
+					cwd = "${workspaceFolder}",
+					stopOnEntry = false,
+				},
+			}
+
+			-- Use the exact same configuration for C files
+			dap.configurations.c = dap.configurations.cpp
 		end,
 	},
-
 	{
 		"rcarriga/nvim-dap-ui",
 		dependencies = { "mfussenegger/nvim-dap", "nvim-neotest/nvim-nio" },
@@ -399,6 +460,25 @@ require("lazy").setup({
 		-- use opts = {} for passing setup options
 		-- this is equivalent to setup({}) function
 	},
+	{
+		"MeanderingProgrammer/render-markdown.nvim",
+		dependencies = { "nvim-treesitter/nvim-treesitter", "nvim-tree/nvim-web-devicons" },
+		ft = { "markdown" },
+		config = function()
+			require("render-markdown").setup({})
+
+			vim.api.nvim_create_autocmd("FileType", {
+				pattern = "markdown",
+				callback = function(event)
+					-- Mapped to <leader>tp (Space + t + p)
+					vim.keymap.set("n", "<leader>tp", "<cmd>RenderMarkdown toggle<CR>", {
+						buffer = event.buf,
+						desc = "[T]oggle Markdown [P]review",
+					})
+				end,
+			})
+		end,
+	},
 	-- NOTE: Plugins can also be configured to run Lua code when they are loaded.
 	--
 	-- This is often very useful to both group configuration, as well as handle
@@ -429,7 +509,13 @@ require("lazy").setup({
 			},
 		},
 	},
-
+	{
+		"mbbill/undotree",
+		config = function()
+			-- Maps <leader>u to toggle the undo tree
+			vim.keymap.set("n", "<leader>u", vim.cmd.UndotreeToggle, { desc = "Toggle [U]ndo Tree" })
+		end,
+	},
 	-- NOTE: Plugins can specify dependencies.
 	--
 	-- The dependencies are proper plugin specifications as well - anything
