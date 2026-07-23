@@ -843,7 +843,15 @@ require("lazy").setup({
 			--  Feel free to add/remove any LSPs that you want here. They will automatically be installed.
 			--  See `:help lsp-config` for information about keys and how to configure
 			local servers = {
-				clangd = {},
+				clangd = {
+					cmd = {
+						"clangd",
+						"--fallback-style=file",
+						"--header-insertion=never",
+						"--completion-style=detailed",
+						"--clang-tidy",
+					},
+				},
 				-- gopls = {},
 				pyright = {},
 				ruff = {},
@@ -852,26 +860,32 @@ require("lazy").setup({
 						command = "clippy",
 					},
 				},
-				--
-				-- Some languages (like typescript) have entire language plugins that can be useful:
-				--    https://github.com/pmizio/typescript-tools.nvim
-				--
-				-- But for many setups, the LSP (`ts_ls`) will work just fine
-				-- ts_ls = {},
+				-- Verilog/SystemVerilog: provides diagnostics (incl. linting) + go-to-def/hover/etc.
+				-- `--rules_config_search` makes it look for a `.rules.verible_lint` file up the
+				-- directory tree, so you can customize lint rules per-project.
+				-- See `verible-verilog-ls --helpfull` for all flags.
+				verible = {
+					cmd = { "verible-verilog-ls", "--rules_config_search" },
+					filetypes = { "verilog", "systemverilog" },
+				},
+				ada_ls = {},
 			}
 
-			-- Ensure the servers and tools above are installed
-			--
-			-- To check the current status of installed tools and/or manually install
-			-- other tools, you can run
-			--    :Mason
-			--
-			-- You can press `g?` for help in this menu.
-			local ensure_installed = vim.tbl_keys(servers or {})
+			-- Map lspconfig names to Mason package names when they differ
+			local mason_package_map = {
+				ada_ls = "ada-language-server",
+			}
+
+			-- Build the list of Mason tools to install
+			local ensure_installed = {}
+			for server_name, _ in pairs(servers) do
+				local mason_pkg = mason_package_map[server_name] or server_name
+				table.insert(ensure_installed, mason_pkg)
+			end
+
 			vim.list_extend(ensure_installed, {
-				"lua-language-server", -- Lua Language server
-				"stylua", -- Used to format Lua code
-				-- You can add other tools here that you want Mason to install
+				"lua-language-server",
+				"stylua",
 			})
 
 			require("mason-tool-installer").setup({ ensure_installed = ensure_installed })
@@ -916,6 +930,67 @@ require("lazy").setup({
 		end,
 	},
 
+	{ -- Semantic linting for Verilog/SystemVerilog (Verible only checks style, not
+		-- elaboration, so this catches undeclared signals, illegal procedural
+		-- assignment to nets, blocking vs. non-blocking mistakes, etc.)
+		"mfussenegger/nvim-lint",
+		event = { "BufReadPre", "BufNewFile" },
+		config = function()
+			local lint = require("lint")
+			lint.linters_by_ft = {
+				verilog = { "verilator" },
+				systemverilog = { "verilator" },
+			}
+			-- `-Wall` turns on the full warning set; drop it (or add `-Wno-<rule>`
+			-- flags) if it gets too noisy for your codebase.
+			lint.linters.verilator.args = {
+				"--lint-only",
+				"-Wall",
+				"--bbox-sys", -- treat unknown $system tasks/functions as black boxes
+			}
+
+			local lint_augroup = vim.api.nvim_create_augroup("lint", { clear = true })
+			vim.api.nvim_create_autocmd({ "BufWritePost", "BufReadPost", "InsertLeave" }, {
+				group = lint_augroup,
+				callback = function()
+					-- Verilator lints the file on disk, so this is a no-op until you save.
+					require("lint").try_lint()
+				end,
+			})
+
+			-- Debounced "as you type" linting for Verilog/SystemVerilog specifically.
+			-- Verilator can't read from stdin, so getting live feedback means
+			-- auto-saving the buffer (debounced, so it's not on every keystroke)
+			-- and then re-running the linter. Only kicks in for verilog/systemverilog
+			-- buffers that already have a filename, so it won't spam-save unnamed
+			-- buffers or other filetypes.
+			local verilog_lint_timer = nil
+			vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
+				group = lint_augroup,
+				pattern = { "*.v", "*.sv", "*.svh" },
+				callback = function(args)
+					local ft = vim.bo[args.buf].filetype
+					if ft ~= "verilog" and ft ~= "systemverilog" then
+						return
+					end
+					if verilog_lint_timer then
+						pcall(function()
+							verilog_lint_timer:stop()
+						end)
+					end
+					verilog_lint_timer = vim.defer_fn(function()
+						if vim.api.nvim_buf_is_valid(args.buf) and vim.bo[args.buf].modified then
+							vim.api.nvim_buf_call(args.buf, function()
+								vim.cmd("silent! write")
+							end)
+						end
+						require("lint").try_lint()
+					end, 500) -- ms after you stop typing; raise this if it feels too eager
+				end,
+			})
+		end,
+	},
+
 	{ -- Autoformat
 		"stevearc/conform.nvim",
 		event = { "BufWritePre" },
@@ -935,6 +1010,10 @@ require("lazy").setup({
 			format_on_save = false,
 			formatters_by_ft = {
 				lua = { "stylua" },
+				c = { "clang-format" },
+				cpp = { "clang-format" },
+				verilog = { "verible-verilog-format" },
+				systemverilog = { "verible-verilog-format" },
 				-- Conform can also run multiple formatters sequentially
 				-- python = { "isort", "black" },
 				--
@@ -1129,6 +1208,8 @@ require("lazy").setup({
 				"vim",
 				"vimdoc",
 				"asm",
+				"verilog",
+				"ada",
 			},
 			auto_install = true,
 			highlight = { enable = true },
