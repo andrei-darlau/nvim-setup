@@ -1131,6 +1131,13 @@ require("lazy").setup({
 				styles = {
 					comments = { italic = false }, -- Disable italics in comments
 				},
+				on_highlights = function(hl, c)
+					hl["@variable.parameter"] = { fg = c.orange }
+					hl["@property"] = { fg = c.cyan }
+					hl["@keyword.repeat"] = { fg = c.magenta } -- always/initial
+					hl["@punctuation.bracket"] = { fg = c.teal } -- begin/end + ()[]{}
+					hl["@keyword.edge"] = { fg = c.yellow }
+				end,
 			})
 
 			-- Load the colorscheme here.
@@ -1192,7 +1199,9 @@ require("lazy").setup({
 	-- },
 	{
 		"nvim-treesitter/nvim-treesitter",
+		branch = "master", -- keeps the classic API you're already using
 		build = ":TSUpdate",
+		main = "nvim-treesitter.configs", -- makes sure `opts` actually reaches setup()
 		opts = {
 			ensure_installed = {
 				"bash",
