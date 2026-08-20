@@ -5,6 +5,8 @@ Kickstart-derived config, updated for Neovim 0.12.x
 Changes from the previous version are marked with `-- CHANGED:` / `-- REMOVED:`
 so you can audit them. See the accompanying notes for the reasoning.
 
+VHDL support added in this revision is marked `-- ADDED (VHDL):`.
+
 --]]
 
 -- Set <space> as the leader key
@@ -94,6 +96,11 @@ vim.o.confirm = true
 vim.filetype.add({
 	extension = {
 		asm = "nasm",
+		-- ADDED (VHDL): Neovim already maps .vhd/.vhdl/.vho/.vst/.vbe -> vhdl,
+		-- so nothing is needed for those. .vht (Quartus VHDL testbench) and
+		-- .vhs are not in the default table.
+		vht = "vhdl",
+		vhs = "vhdl",
 	},
 })
 
@@ -715,13 +722,56 @@ require("lazy").setup({
 					cmd = { "verible-verilog-ls", "--rules_config_search" },
 					filetypes = { "verilog", "systemverilog" },
 				},
+
+				-- ADDED (VHDL): VHDL-LS from rust_hdl. This is the VHDL equivalent of
+				-- verible + verilator combined -- unlike verible it does real semantic
+				-- elaboration, so you get "no declaration for X", port-map mismatches,
+				-- type errors, goto-definition and rename across files.
+				--
+				-- Defaults are fine (cmd = { "vhdl_ls" }, filetypes = { "vhdl" }), but
+				-- it wants a `vhdl_ls.toml` in the project root to know your libraries:
+				--
+				--   [libraries]
+				--   work.files  = ["src/**/*.vhd", "rtl/**/*.vhd"]
+				--   tb.files    = ["tb/**/*.vhd"]
+				--   unisim.files = ["/opt/Xilinx/.../unisims/**/*.vhd"]
+				--
+				-- You can also put a global one at ~/.config/vhdl_ls/vhdl_ls.toml.
+				-- Without any config it lumps every file it finds into `work`, which
+				-- is fine for small projects and noisy for anything with real libs.
+				--
+				-- Install: `cargo install vhdl_ls` (or Mason, see the map below).
+				-- Alternative if you prefer GHDL's front end: `ghdl_ls = {}`, from the
+				-- ghdl-language-server python package. Don't enable both.
+				vhdl_ls = {
+          cmd = { "/usr/bin/vhdl_ls" },
+					settings = {
+						-- VHDL-LS reads most things from vhdl_ls.toml, but the LSP
+						-- settings below control the non-project-specific bits.
+						vhdl = {
+							-- "unused"/"unnecessary" hints show up as diagnostic hints
+							-- rather than warnings; keep them, they're cheap.
+							silent = false,
+						},
+					},
+				},
+
 				ada_ls = {},
 			}
 
 			-- Map lspconfig names to Mason package names when they differ
 			local mason_package_map = {
 				ada_ls = "ada-language-server",
+				-- ADDED (VHDL): mason has shipped VHDL-LS under both `vhdl_ls` and
+				-- `rust_hdl` depending on registry version. The has_package filter
+				-- below means a wrong guess degrades to a one-line warning instead
+				-- of an error toast on every startup.
+				vhdl_ls = "vhdl_ls",
 			}
+
+      local mason_ignore = {
+        vhdl_ls = true, -- AUR package
+      }
 
 			local ensure_installed = {}
 			for server_name, _ in pairs(servers) do
@@ -739,6 +789,35 @@ require("lazy").setup({
 			--   rustup component add rust-analyzer
 			-- so it always matches your toolchain. Mason's build regularly drifts out
 			-- of sync with rustup and produces "failed to find sysroot" errors.
+			--
+			-- Same reasoning applies to the VHDL toolchain: `ghdl` and `vsg` are not
+			-- Mason packages. Install them from your distro / pipx:
+			--   ghdl: pacman -S ghdl | apt install ghdl | nix profile install nixpkgs#ghdl
+			--   vsg:  pipx install vsg
+
+			-- ADDED (VHDL): drop anything the local Mason registry doesn't actually
+			-- have, so a renamed/absent package can't break startup.
+			local ok_registry, registry = pcall(require, "mason-registry")
+			if ok_registry then
+				local available, missing = {}, {}
+				for _, pkg in ipairs(ensure_installed) do
+					local ok_has, has = pcall(registry.has_package, pkg)
+					if ok_has and has then
+						table.insert(available, pkg)
+					else
+						table.insert(missing, pkg)
+					end
+				end
+				if #missing > 0 then
+					vim.notify(
+						"Mason has no package named: "
+							.. table.concat(missing, ", ")
+							.. " -- install these manually or fix mason_package_map.",
+						vim.log.levels.WARN
+					)
+				end
+				ensure_installed = available
+			end
 
 			require("mason-tool-installer").setup({ ensure_installed = ensure_installed })
 
@@ -779,7 +858,7 @@ require("lazy").setup({
 		end,
 	},
 
-	{ -- Semantic linting for Verilog/SystemVerilog
+	{ -- Semantic linting for Verilog/SystemVerilog, syntax linting for VHDL
 		"mfussenegger/nvim-lint",
 		event = { "BufReadPre", "BufNewFile" },
 		config = function()
@@ -794,6 +873,66 @@ require("lazy").setup({
 				"--bbox-sys",
 			}
 
+			-- ADDED (VHDL): nvim-lint ships no ghdl linter, so define one.
+			--
+			-- `-s` is *syntax only*: it parses the file and exits without touching
+			-- the work library, so it never writes .cf/.o files into your tree and
+			-- never needs dependencies analysed first. Semantic errors (undeclared
+			-- signals, width mismatches, bad port maps) come from vhdl_ls, which
+			-- already elaborates the whole design -- running `ghdl -a` here as well
+			-- would just duplicate that, more slowly and with a dirty work dir.
+			--
+			-- Bump --std if you're on '93: ghdl accepts 87/93/93c/00/02/08/19.
+			lint.linters.ghdl = {
+				cmd = "ghdl",
+				stdin = false,
+				append_fname = true,
+				args = {
+					"-s",
+					"--std=08",
+					"-frelaxed-rules",
+					"--warn-no-hide",
+				},
+				stream = "stderr",
+				ignore_exitcode = true,
+				parser = function(output, _bufnr)
+					local diagnostics = {}
+					for line in vim.gsplit(output or "", "\n", { trimempty = true }) do
+						-- ghdl:  path/to/file.vhd:12:5: message
+						--        path/to/file.vhd:12:5:warning: message
+						local lnum, col, rest = line:match("^[^:]*:(%d+):(%d+):%s*(.*)$")
+						if lnum then
+							local severity = vim.diagnostic.severity.ERROR
+							local message = rest
+							local kind, tail = rest:match("^(%a+):%s*(.*)$")
+							if kind == "warning" then
+								severity, message = vim.diagnostic.severity.WARN, tail
+							elseif kind == "note" then
+								severity, message = vim.diagnostic.severity.INFO, tail
+							elseif kind == "error" then
+								message = tail
+							end
+							table.insert(diagnostics, {
+								lnum = tonumber(lnum) - 1,
+								col = tonumber(col) - 1,
+								end_lnum = tonumber(lnum) - 1,
+								end_col = tonumber(col),
+								severity = severity,
+								source = "ghdl",
+								message = message,
+							})
+						end
+					end
+					return diagnostics
+				end,
+			}
+
+			-- Only wire ghdl up if it's actually on PATH, otherwise every save in a
+			-- .vhd buffer produces a "command not found" notification.
+			if vim.fn.executable("ghdl") == 1 then
+				lint.linters_by_ft.vhdl = { "ghdl" }
+			end
+
 			local lint_augroup = vim.api.nvim_create_augroup("lint", { clear = true })
 			vim.api.nvim_create_autocmd({ "BufWritePost", "BufReadPost", "InsertLeave" }, {
 				group = lint_augroup,
@@ -807,22 +946,29 @@ require("lazy").setup({
 				end,
 			})
 
-			-- Debounced "as you type" linting for Verilog/SystemVerilog specifically.
-			local verilog_lint_timer = nil
+			-- Debounced "as you type" linting for the HDL filetypes.
+			-- CHANGED (VHDL): generalised from Verilog-only. Both verilator and ghdl
+			-- read from disk rather than stdin, hence the forced write.
+			local hdl_lint_fts = {
+				verilog = true,
+				systemverilog = true,
+				vhdl = true,
+			}
+			local hdl_lint_timer = nil
 			vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
 				group = lint_augroup,
-				pattern = { "*.v", "*.sv", "*.svh" },
+				pattern = { "*.v", "*.sv", "*.svh", "*.vhd", "*.vhdl", "*.vho", "*.vht", "*.vhs" },
 				callback = function(args)
 					local ft = vim.bo[args.buf].filetype
-					if ft ~= "verilog" and ft ~= "systemverilog" then
+					if not hdl_lint_fts[ft] or not lint.linters_by_ft[ft] then
 						return
 					end
-					if verilog_lint_timer then
+					if hdl_lint_timer then
 						pcall(function()
-							verilog_lint_timer:stop()
+							hdl_lint_timer:stop()
 						end)
 					end
-					verilog_lint_timer = vim.defer_fn(function()
+					hdl_lint_timer = vim.defer_fn(function()
 						if vim.api.nvim_buf_is_valid(args.buf) and vim.bo[args.buf].modified then
 							vim.api.nvim_buf_call(args.buf, function()
 								vim.cmd("silent! write")
@@ -855,12 +1001,38 @@ require("lazy").setup({
 			-- format-on-save + autosave means your buffer gets rewritten while you
 			-- are still typing. Use <leader>f.
 			format_on_save = false,
+
+			-- ADDED (VHDL): conform has no built-in vsg definition, so declare one.
+			-- vsg (VHDL Style Guide) rewrites the file in place rather than writing
+			-- to stdout, so stdin = false and let conform hand it a temp file via
+			-- $FILENAME and read the result back.
+			--
+			--   pipx install vsg
+			--
+			-- Rules are configured per project with a vsg_config.yaml; add
+			--   args = { "--fix", "-c", "vsg_config.yaml", "-f", "$FILENAME" }
+			-- if you keep one at the project root.
+			formatters = {
+				vsg = {
+					command = "vsg",
+					stdin = false,
+					args = { "--fix", "-f", "$FILENAME" },
+					-- vsg exits 1 when it found rule violations, including ones it
+					-- just fixed. Without this conform treats every fix as a failure.
+					exit_codes = { 0, 1 },
+				},
+			},
+
 			formatters_by_ft = {
 				lua = { "stylua" },
 				c = { "clang-format" },
 				cpp = { "clang-format" },
 				verilog = { "verible-verilog-format" },
 				systemverilog = { "verible-verilog-format" },
+				-- ADDED (VHDL): vsg if installed, otherwise fall back to whatever
+				-- the attached LSP offers (recent VHDL-LS versions do implement
+				-- textDocument/formatting; older ones simply do nothing).
+				vhdl = { "vsg", lsp_format = "fallback" },
 				-- CHANGED: rust formatting now lives here instead of rust.vim's
 				-- rustfmt_autosave. Going through the LSP means rustfmt picks up the
 				-- edition and rustfmt.toml from your Cargo project, which a bare
@@ -924,12 +1096,16 @@ require("lazy").setup({
 				styles = {
 					comments = { italic = false },
 				},
+				-- NOTE (VHDL): these are global capture->color links, not per-language.
+				-- VHDL picks them up automatically as soon as the vhdl query file in
+				-- after/queries/vhdl/highlights.scm assigns the same capture names.
+				-- Nothing language-specific needs to be added here.
 				on_highlights = function(hl, c)
 					hl["@variable.parameter"] = { fg = c.orange }
 					hl["@property"] = { fg = c.cyan }
-					hl["@keyword.repeat"] = { fg = c.magenta } -- always/initial
+					hl["@keyword.repeat"] = { fg = c.magenta } -- always/initial, process
 					hl["@punctuation.bracket"] = { fg = c.teal } -- begin/end + ()[]{}
-					hl["@keyword.edge"] = { fg = c.yellow }
+					hl["@keyword.edge"] = { fg = c.yellow } -- posedge/negedge, rising_edge/falling_edge
 				end,
 			})
 
@@ -996,7 +1172,10 @@ require("lazy").setup({
 				"vim",
 				"vimdoc",
 				"asm",
-				"verilog",
+				"systemverilog",
+				-- ADDED (VHDL): note there is no separate "systemverilog" parser --
+				-- the `verilog` parser covers both -- but VHDL is its own grammar.
+				"vhdl",
 				"ada",
 				-- ADDED: you write Rust but had no rust/toml parsers listed.
 				"rust",
@@ -1011,7 +1190,9 @@ require("lazy").setup({
 				ts.install(parsers)
 			end)
 
-			vim.api.nvim_create_autocmd("FileType", {
+			vim.treesitter.language.register("systemverilog", { "verilog", "systemverilog" })
+			
+      vim.api.nvim_create_autocmd("FileType", {
 				group = vim.api.nvim_create_augroup("treesitter-start", { clear = true }),
 				callback = function(args)
 					local lang = vim.treesitter.language.get_lang(vim.bo[args.buf].filetype)
@@ -1039,7 +1220,7 @@ require("lazy").setup({
 	-- 	opts = {
 	-- 		ensure_installed = { "bash", "c", "cpp", "diff", "html", "lua", "luadoc",
 	-- 			"markdown", "markdown_inline", "query", "vim", "vimdoc", "asm",
-	-- 			"verilog", "ada", "rust", "toml" },
+	-- 			"verilog", "vhdl", "ada", "rust", "toml" },
 	-- 		auto_install = true,
 	-- 		highlight = { enable = true },
 	-- 		indent = { enable = true },
@@ -1097,6 +1278,46 @@ vim.api.nvim_create_autocmd("FileType", {
 		map("<leader>rk", "<cmd>RustLsp flyCheck run<CR>", "Run cargo chec[k] now")
 	end,
 })
+
+-- ADDED (VHDL): comment string. Neovim's built-in vhdl ftplugin sets
+-- commentstring correctly ("-- %s") on recent versions; this is a no-op guard
+-- for older ones and for buffers that only got a filetype from the table above.
+vim.api.nvim_create_autocmd("FileType", {
+	pattern = "vhdl",
+	group = vim.api.nvim_create_augroup("vhdl-buffer-opts", { clear = true }),
+	callback = function(event)
+		if vim.bo[event.buf].commentstring == "" then
+			vim.bo[event.buf].commentstring = "-- %s"
+		end
+		-- VHDL convention is 2-space indent; drop these two lines if you'd
+		-- rather keep the global 4.
+		vim.bo[event.buf].shiftwidth = 2
+		vim.bo[event.buf].tabstop = 2
+		vim.bo[event.buf].expandtab = true
+	end,
+})
+
+-- ADDED (VHDL): quick helper for the treesitter query file. Run
+-- `:VhdlTsSymbols process` (or begin/end/...) in a VHDL buffer to see exactly
+-- what the installed vhdl grammar calls its keyword nodes. Use the output to
+-- correct after/queries/vhdl/highlights.scm if the names there don't match.
+vim.api.nvim_create_user_command("VhdlTsSymbols", function(opts)
+	local ok, info = pcall(vim.treesitter.language.inspect, "vhdl")
+	if not ok then
+		vim.notify("vhdl parser not installed", vim.log.levels.ERROR)
+		return
+	end
+	local needle = (opts.args ~= "" and opts.args or ""):lower()
+	local names = {}
+	for _, sym in ipairs(info.symbols or {}) do
+		local name = type(sym) == "table" and sym[1] or sym
+		if type(name) == "string" and (needle == "" or name:lower():find(needle, 1, true)) then
+			table.insert(names, name)
+		end
+	end
+	table.sort(names)
+	vim.print(names)
+end, { nargs = "?", desc = "List vhdl treesitter node names matching a substring" })
 
 -- The line beneath this is called `modeline`. See `:help modeline`
 -- vim: ts=2 sts=2 sw=2 et
