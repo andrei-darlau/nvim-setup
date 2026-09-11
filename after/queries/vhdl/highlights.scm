@@ -31,9 +31,13 @@
 ; ---------------------------------------------------------------------------
 
 ; --- process blocks: the VHDL "always" ------------------------------------
+; Confirmed against jpt13653903/tree-sitter-vhdl's own queries/Neovim/
+; highlights.scm: "process"/"postponed" are plain anonymous string tokens,
+; not named nodes -- the grammar's scanner normalises case itself, so a
+; plain string literal here matches regardless of how the user cased it.
 [
-  (kw_process)
-  (kw_postponed)
+  "process"
+  "postponed"
 ] @keyword.repeat
 
 ; --- begin/end as block delimiters, matching { } in C ----------------------
@@ -41,8 +45,8 @@
 ; process, package body, subprogram bodies, generate, block ...) so this is
 ; the single highest-value line in the file.
 [
-  (kw_begin)
-  (kw_end)
+  "begin"
+  "end"
 ] @punctuation.bracket
 
 ; --- real brackets, in case the base query misses them ---------------------
@@ -54,10 +58,13 @@
 ] @punctuation.bracket
 
 ; --- clock edges: the VHDL posedge/negedge ---------------------------------
-; These are ordinary function calls from ieee.std_logic_1164, not keywords, so
-; they have to be matched by name. VHDL is case-insensitive and everyone
-; spells these differently, hence the list.
-((simple_name) @keyword.edge
+; These are ordinary function calls from ieee.std_logic_1164, not keywords,
+; and there's no dedicated call/function-name node worth targeting here --
+; the grammar just wraps the callee in a generic (_) "function:" field. It's
+; simplest (and matches the base query's own style) to key off plain
+; (identifier) text. This pattern is appended after the base query's
+; `(identifier) @variable`, so for these specific names it wins.
+((identifier) @keyword.edge
   (#any-of? @keyword.edge
     "rising_edge" "RISING_EDGE" "Rising_Edge"
     "falling_edge" "FALLING_EDGE" "Falling_Edge"))
@@ -81,19 +88,9 @@
 ; ---------------------------------------------------------------------------
 
 ; ---------------------------------------------------------------------------
-; ALTERNATIVE NODE-NAME CONVENTIONS
-;
-; (a) UPPERCASE named rules -- replace the first two blocks with:
-;
-;     [(PROCESS) (POSTPONED)] @keyword.repeat
-;     [(BEGIN) (END)] @punctuation.bracket
-;
-; (b) plain string literals (only possible if the grammar is case-sensitive
-;     or lowercases tokens) -- replace with:
-;
-;     ["process" "postponed"] @keyword.repeat
-;     ["begin" "end"] @punctuation.bracket
-;
-; Likewise, if (simple_name) is rejected, the identifier node is probably
-; (identifier) or (name) -- :InspectTree on a call to rising_edge() will say.
+; CONFIRMED against jpt13653903/tree-sitter-vhdl's own queries/Neovim/
+; highlights.scm (fetched from the tree-sitter-vhdl sdist on PyPI):
+; keywords are plain lowercase string literals ("process", "begin", "end",
+; ...), and plain identifiers are (identifier), not (simple_name). That's
+; convention (b) above, and it's what this file now uses.
 ; ---------------------------------------------------------------------------
