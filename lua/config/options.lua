@@ -78,6 +78,7 @@ vim.opt.whichwrap:append("<,>,[,]")
 vim.filetype.add({
 	extension = {
 		asm = "nasm",
+		cl = "cool",
 		vht = "vhdl",
 		vhs = "vhdl",
 	},

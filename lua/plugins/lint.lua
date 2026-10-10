@@ -68,7 +68,54 @@ return {
 				return diagnostics
 			end,
 		}
+		-- COOL has no language server, so lint by running the reference
+		-- compiler. Change `cmd` if your course ships it under another name.
+		--
+		-- coolc drops output files (.s) in its working directory, so run it
+		-- from a scratch dir instead of polluting your project.
+		local cool_cmd = "/usr/class/bin/coolc"
+		local cool_scratch = vim.fn.stdpath("cache") .. "/cool-lint"
+		vim.fn.mkdir(cool_scratch, "p")
 
+		lint.linters.cool = {
+			cmd = cool_cmd,
+			stdin = false,
+			append_fname = true,
+			stream = "both",
+			ignore_exitcode = true,
+			cwd = cool_scratch,
+			parser = function(output, bufnr)
+				local diagnostics = {}
+				for line in vim.gsplit(output or "", "\n", { trimempty = true }) do
+					-- Two formats the reference tools use:
+					--   "foo.cl", line 5: syntax error at or near ...
+					--   foo.cl:5: Class Foo was previously defined.
+					local lnum, message = line:match('^"[^"]*", line (%d+): (.*)$')
+					if not lnum then
+						lnum, message = line:match("^[^:]+:(%d+): (.*)$")
+					end
+					if lnum then
+						local row = tonumber(lnum) - 1
+						-- No column info, so highlight the whole line.
+						local text = vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1] or ""
+						table.insert(diagnostics, {
+							lnum = row,
+							col = 0,
+							end_lnum = row,
+							end_col = #text,
+							severity = vim.diagnostic.severity.ERROR,
+							source = "coolc",
+							message = message,
+						})
+					end
+				end
+				return diagnostics
+			end,
+		}
+
+		if vim.fn.executable(cool_cmd) == 1 then
+			lint.linters_by_ft.cool = { "cool" }
+		end
 		-- Only wire ghdl up if it's actually on PATH, otherwise every save in a
 		-- .vhd buffer produces a "command not found" notification.
 		if vim.fn.executable("ghdl") == 1 then
