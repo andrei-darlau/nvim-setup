@@ -159,7 +159,10 @@ return {
 			cmd = {
 				"clangd",
 				"--background-index",
-				"--query-driver=/home/dulau/zephyr-sdk-*/xtensa-espressif_esp32s3_zephyr-elf/bin/*-gcc", -- adjust to step 6
+				"--clang-tidy",
+				"--header-insertion=never",
+				"--completion-style=detailed",
+				"--fallback-style=file",
 			},
 			-- root = the directory nvim was started from
 			root_dir = function(bufnr, on_dir)
