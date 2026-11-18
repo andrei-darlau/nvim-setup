@@ -75,9 +75,28 @@ vim.opt.whichwrap:append("<,>,[,]")
 -- [[ Filetypes ]]
 -- Neovim already maps .vhd/.vhdl/.vho/.vst/.vbe to vhdl. .vht (Quartus VHDL
 -- testbench) and .vhs are not in the default table.
+--
+-- .s and .asm are shared by several assembly dialects, so sniff the content:
+-- MIPS files use $-prefixed registers ($t0, $sp, $zero, $31) and `syscall`.
+local function is_mips(bufnr)
+	local text = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, 100, false), "\n")
+	return text:find("%$[tsavkfg]?[p%d]") ~= nil
+		or text:find("%$zero") ~= nil
+		or text:find("%f[%w]syscall%f[%W]") ~= nil
+end
+
 vim.filetype.add({
 	extension = {
-		asm = "nasm",
+		mips = "mips",
+		s = function(_, bufnr)
+			if is_mips(bufnr) then
+				return "mips"
+			end
+			-- nil falls through to Neovim's default .s detection
+		end,
+		asm = function(_, bufnr)
+			return is_mips(bufnr) and "mips" or "nasm"
+		end,
 		cl = "cool",
 		vht = "vhdl",
 		vhs = "vhdl",

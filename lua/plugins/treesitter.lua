@@ -26,6 +26,7 @@ return {
 			"luadoc",
 			"markdown",
 			"markdown_inline",
+			"mips",
 			"python",
 			"query",
 			"rust",
