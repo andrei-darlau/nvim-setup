@@ -155,6 +155,19 @@ return {
 		})
 		vim.lsp.enable("lua_ls")
 
+		vim.lsp.config("clangd", {
+			cmd = {
+				"clangd",
+				"--background-index",
+				"--query-driver=/home/dulau/zephyr-sdk-*/xtensa-espressif_esp32s3_zephyr-elf/bin/*-gcc", -- adjust to step 6
+			},
+			-- root = the directory nvim was started from
+			root_dir = function(bufnr, on_dir)
+				on_dir(vim.fn.getcwd())
+			end,
+		})
+		vim.lsp.enable("clangd")
+
 		-- [[ Tool installation ]]
 		-- lspconfig name -> Mason package name, where they differ
 		local mason_package_map = {

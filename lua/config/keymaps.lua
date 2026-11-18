@@ -48,3 +48,5 @@ map("n", "<leader>td", function()
 		virtual_text = not to_lines,
 	})
 end, { desc = "[T]oggle [D]iagnostic virtual lines" })
+map("n", "<Tab>", "i<Tab>", { desc = "Insert a literal tab" })
+
